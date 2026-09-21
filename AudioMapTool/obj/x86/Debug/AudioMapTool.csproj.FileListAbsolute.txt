@@ -1,0 +1,12 @@
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\bin\Debug\AudioMapTool.exe
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\bin\Debug\AudioMapTool.pdb
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\MainWindow.baml
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\MainWindow.g.cs
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\App.g.cs
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool_MarkupCompile.cache
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool.g.resources
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool.Properties.Resources.resources
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool.csproj.GenerateResource.Cache
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool.exe
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\AudioMapTool.pdb
+C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\App.baml
