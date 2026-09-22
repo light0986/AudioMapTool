@@ -1,0 +1,104 @@
+<UserControl x:Class="AudioMapTool.Fragment.PathMapControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <!--
+            對照表主體(「路徑」頁簽):選/功能代號/音效檔名稱,綁定共用的 AudioMapRow.Code/FileName。
+            「音效檔名稱」欄本身要等 MainWindow 工具列的「資料夾」選好之後才能用(見 FolderPath)。
+            RowStyle:這一列自己在播放中/暫停中,或被別列的播放鎖定時,整列反灰不能用——這個頁簽沒有
+            像「最大音量」頁簽那樣要保留的播放控制按鈕,所以播放/暫停時直接整列鎖,不用留任何欄位。
+            - SelectionUnit="Cell":反藍只反單一儲存格,不是整列
+            - RowHeight="24" + CellStyle(DataGridCellStyleNoBorder,定義在 App.xaml):固定列高、去掉目前儲存格的焦點框
+        -->
+        <DataGrid x:Name="dgAudioMap"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="True"
+                  RowHeight="24"
+                  SelectionUnit="Cell"
+                  CellStyle="{StaticResource DataGridCellStyleNoBorder}"
+                  Margin="4">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="IsEnabled" Value="{Binding IsPathTabRowEnabled}" />
+                    <Style.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+            <DataGrid.Columns>
+
+                <!-- 選:批次操作(刪除/拷貝)用的勾選欄,置中顯示 -->
+                <DataGridCheckBoxColumn Header="選" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="40"
+                                         ElementStyle="{StaticResource DataGridCellCheckBoxStyle}"
+                                         EditingElementStyle="{StaticResource DataGridCellCheckBoxStyle}" />
+
+                <!--
+                    功能代號:永遠可編輯的 TextBox(不需要雙擊進入編輯模式)。
+                    GotFocus 記錄目前作用列;LostFocus 驗證代號是否跟其他列重複。
+                -->
+                <DataGridTemplateColumn x:Name="colCode" Header="功能代號" Width="200">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox x:Name="txtCode"
+                                     Style="{StaticResource DataGridCellTextBoxStyle}"
+                                     Text="{Binding Code, UpdateSourceTrigger=PropertyChanged}"
+                                     GotFocus="TxtCode_GotFocus"
+                                     LostFocus="TxtCode_LostFocus"
+                                     KeyDown="TxtRow_KeyDown" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!--
+                    音效檔名稱:TextBox 疊加一個右側查詢按鈕("...")。
+                    按鈕平常顯示,方便直接點擊跳出 OpenFileDialog 選檔(只取回檔名,不含資料夾路徑);
+                    一旦游標點進 TextBox(IsKeyboardFocusWithin=True)取得焦點準備手動輸入時,
+                    按鈕就會收合隱藏,避免擋住輸入區域。
+                    Padding 右側留 26px 空間,剛好讓文字不會被按鈕蓋住。
+                    TextBox 跟按鈕的 IsEnabled 都綁到 FolderPath(工具列「資料夾」選的路徑):
+                    還沒選資料夾之前,這欄不能用。
+                -->
+                <DataGridTemplateColumn Header="音效檔名稱" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <TextBox x:Name="txtFileName"
+                                         Style="{StaticResource DataGridCellTextBoxStyle}"
+                                         Text="{Binding FileName, UpdateSourceTrigger=PropertyChanged}"
+                                         IsEnabled="{Binding FolderPath, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource NullOrEmptyToBooleanConverter}}"
+                                         GotFocus="TxtFileName_GotFocus"
+                                         LostFocus="TxtFileName_LostFocus"
+                                         KeyDown="TxtRow_KeyDown"
+                                         Padding="2,0,26,0" />
+                                <Button Content="..."
+                                        Width="22" Height="20"
+                                        Padding="0"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        Margin="0,0,2,0"
+                                        IsEnabled="{Binding FolderPath, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource NullOrEmptyToBooleanConverter}}"
+                                        Click="BtnBrowseAudio_Click">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <!-- txtFileName 取得鍵盤焦點時,隱藏查詢按鈕 -->
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, ElementName=txtFileName}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

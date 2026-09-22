@@ -1,0 +1,89 @@
+<UserControl x:Class="AudioMapTool.Fragment.LoopSegmentControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <!--
+            對照表主體(「循環片段」頁簽):選/功能代號/開始時間/結束時間,綁定共用 AudioMapRow 的 CStart/CEnd。
+            RowStyle:音效檔名稱空白、這一列正在播放中(暫停中不算,因為暫停時要能編輯時間欄位)、
+            或被別列的播放鎖定時,整列反灰不能使用(見 AudioMapRow.IsSegmentTabRowEnabled)。
+            「選」「功能代號」欄另外個別綁 IsEditableWhenIdle:播放中「或」暫停中都要鎖定,
+            只有開始/結束時間欄位在暫停時仍然可以編輯。
+        -->
+        <DataGrid x:Name="dgSegment"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="True"
+                  RowHeight="24"
+                  SelectionUnit="Cell"
+                  CellStyle="{StaticResource DataGridCellStyleNoBorder}"
+                  Margin="4">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Setter Property="IsEnabled" Value="{Binding IsSegmentTabRowEnabled}" />
+                    <Style.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+            <DataGrid.Columns>
+
+                <!-- 選:批次操作(刪除/拷貝)用的勾選欄,置中顯示 -->
+                <DataGridCheckBoxColumn Header="選" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="40"
+                                         ElementStyle="{StaticResource DataGridCellCheckBoxStyle}"
+                                         EditingElementStyle="{StaticResource DataGridCellCheckBoxStyle}" />
+
+                <!-- 功能代號:永遠可編輯的 TextBox。GotFocus 記錄目前作用列;LostFocus 驗證代號是否跟其他列重複。 -->
+                <DataGridTemplateColumn x:Name="colCode" Header="功能代號" Width="200">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox x:Name="txtCode"
+                                     Style="{StaticResource DataGridCellTextBoxStyle}"
+                                     Text="{Binding Code, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsEditableWhenIdle}"
+                                     GotFocus="TxtCode_GotFocus"
+                                     LostFocus="TxtCode_LostFocus"
+                                     KeyDown="TxtRow_KeyDown" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!--
+                    開始時間:格式固定「時:分:秒:碼」(HH:mm:ss:ffff),綁定 CStart。
+                    PreviewTextInput 只允許輸入數字跟冒號;MaxLength 限制總長度;
+                    LostFocus 驗證離開欄位時是否符合格式,不符合就跳提示、把焦點/選取範圍設回同一個 TextBox。
+                -->
+                <DataGridTemplateColumn x:Name="colStart" Header="開始時間" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Style="{StaticResource DataGridCellTextBoxStyle}"
+                                     Text="{Binding CStart, UpdateSourceTrigger=PropertyChanged}"
+                                     MaxLength="13"
+                                     GotFocus="TxtStart_GotFocus"
+                                     LostFocus="TxtStart_LostFocus"
+                                     PreviewTextInput="TxtTimecode_PreviewTextInput"
+                                     KeyDown="TxtRow_KeyDown" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+                <!-- 結束時間:格式固定「時:分:秒:碼」(HH:mm:ss:ffff),綁定 CEnd,規則同開始時間。 -->
+                <DataGridTemplateColumn x:Name="colEnd" Header="結束時間" Width="*">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBox Style="{StaticResource DataGridCellTextBoxStyle}"
+                                     Text="{Binding CEnd, UpdateSourceTrigger=PropertyChanged}"
+                                     MaxLength="13"
+                                     GotFocus="TxtEnd_GotFocus"
+                                     LostFocus="TxtEnd_LostFocus"
+                                     PreviewTextInput="TxtTimecode_PreviewTextInput"
+                                     KeyDown="TxtRow_KeyDown" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+
+            </DataGrid.Columns>
+        </DataGrid>
+    </Grid>
+</UserControl>

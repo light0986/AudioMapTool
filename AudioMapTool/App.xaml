@@ -1,8 +1,15 @@
 ﻿<Application x:Class="AudioMapTool.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:AudioMapTool.Converters"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
+
+        <!-- 字串是否為空的轉換器:「開場片段」「循環片段」「最大音量」頁簽的 DataGridRow.IsEnabled 用它判斷該列是否要反灰 -->
+        <converters:NullOrEmptyToBooleanConverter x:Key="NullOrEmptyToBooleanConverter" />
+
+        <!-- 音量欄位字串 <-> 0~1 的轉換器:「最大音量」頁簽的音量欄用 Slider 拖曳調整,底層還是存字串 -->
+        <converters:VolumeStringConverter x:Key="VolumeStringConverter" />
 
         <!--
             DataGrid 儲存格:去掉「目前儲存格」的焦點框,只靠選取儲存格的反藍顯示;
@@ -38,10 +45,23 @@
             </Style.Triggers>
         </Style>
 
-        <!-- DataGridCheckBoxColumn 用的 CheckBox 置中顯示 -->
+        <!--
+            DataGridCheckBoxColumn 用的 CheckBox 置中顯示。
+            IsEnabled 綁到 AudioMapRow.IsEditableWhenIdle:這一列播放中或暫停中時,「選」欄要鎖定,
+            四個頁簽的「選」欄都用這個共用樣式,所以在這裡綁一次就對全部頁簽生效。
+        -->
         <Style x:Key="DataGridCellCheckBoxStyle" TargetType="CheckBox">
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="IsEnabled" Value="{Binding IsEditableWhenIdle}" />
+        </Style>
+
+        <!--
+            頁簽按鈕外觀(未指定 x:Key,套用到整個應用程式所有的 TabItem)。
+            目前只設定最小寬度,之後要調整頁簽外觀(顏色、Padding...等)可以直接在這裡加 Setter。
+        -->
+        <Style TargetType="TabItem">
+            <Setter Property="Padding" Value="20 0" />
         </Style>
 
     </Application.Resources>

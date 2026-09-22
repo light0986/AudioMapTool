@@ -4,17 +4,17 @@
 winexe
 C#
 .cs
-C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\
+C:\Users\User\Desktop\AudioMapTool\AudioMapTool\obj\x86\Debug\
 AudioMapTool
 none
 false
 DEBUG;TRACE
-C:\Users\lightchen\Desktop\AudioMapTool\AudioMapTool\App.xaml
-11151548125
+C:\Users\User\Desktop\AudioMapTool\AudioMapTool\App.xaml
+52055989742
 
-7-1970054425
-12-1381780322
-MainWindow.xaml;
+16-205632254
+131739839265
+MainWindow.xaml;Fragment\PathMapControl.xaml;Fragment\OpeningSegmentControl.xaml;Fragment\LoopSegmentControl.xaml;Fragment\MaxVolumeControl.xaml;
 
-False
+True
 

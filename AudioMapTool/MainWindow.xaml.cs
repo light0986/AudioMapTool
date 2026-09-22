@@ -7,65 +7,296 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Threading;
 using AudioMapTool.Models;
+using AudioMapTool.Services;
+using AudioMapTool.Utilities;
 using Microsoft.Win32;
 
 namespace AudioMapTool
 {
     /// <summary>
     /// MainWindow.xaml 的互動邏輯。
-    /// 「音效檔對照表」主畫面:維護「功能代號 -> 音效檔路徑」對照表,
-    /// 並可將對照表存成 ini 格式的檔案(每個功能代號一個 Section,格式:
-    /// [功能代號]
-    /// Path=音效檔路徑
-    /// ),供 MediaPlayer 依代號查路徑播放。
+    /// 「音效檔對照表」主畫面:選單、工具列、頁簽容器(TabControl)。
+    /// 「路徑」「開場片段」「循環片段」「最大音量」四個頁簽對應同一份資料(_items,元素是 AudioMapRow),
+    /// 每個頁簽的 UserControl 只是顯示/編輯其中幾個欄位,同一列在四個頁簽都是同一個物件。
+    /// 因為是同一份資料,復原/取消復原、目前開啟/存過的檔案都只有一份,不分頁簽。
+    /// 檔案存成 ini 格式,每個功能代號一個 Section,底下依序是 FileName/SStart/SEnd/CStart/CEnd/MaxS
+    /// (只存檔名,不存完整路徑;實際檔案位置 = 工具列選的「資料夾」+ 檔名,換電腦開檔也能用)。
+    /// 「最大音量」頁簽的開始/暫停/停止透過 PlaybackController 實際播放音效檔,播放/暫停期間
+    /// 這裡負責鎖住其他列(AudioMapRow.IsPlaybackLocked)跟整排選單/工具列(見 SetGlobalControlsEnabled)。
     /// </summary>
     public partial class MainWindow : Window
     {
         #region 變數與初始化
 
-        /// <summary>
-        /// 目前 Grid 顯示中的對照表資料,直接綁定給 dgAudioMap.ItemsSource。
-        /// </summary>
-        private ObservableCollection<AudioMapItem> _items;
-        /// <summary>
-        /// 目前開啟/另存的檔案路徑;尚未存過檔時為 null(此時「存檔」等同「另存新檔」)。
-        /// </summary>
+        /// <summary>四個頁簽共用的對照表資料。</summary>
+        private readonly ObservableCollection<AudioMapRow> _items = new ObservableCollection<AudioMapRow>();
+
+        /// <summary>目前使用者最後點進去的那一列資料(不分頁簽,哪個頁簽的儲存格取得焦點就更新這個)。</summary>
+        private AudioMapRow _activeItem;
+
+        /// <summary>目前開啟/另存的檔案路徑;尚未存過檔時為 null(此時「存檔」等同「另存新檔」)。</summary>
         private string _currentFilePath;
-        /// <summary>
-        /// 目前使用者最後點進去的那一列資料。
-        /// 因為「功能代號」「音效檔路徑」都是自訂 TemplateColumn(內含永遠可編輯的 TextBox),
-        /// DataGrid 內建的 CurrentCell/SelectedItem 在這種欄位上不會可靠更新,
-        /// 所以改由 TextBox 的 GotFocus 事件(TxtRow_GotFocus)自己記錄「目前作用列」,
-        /// 給新增/刪除/拷貝在「沒有打勾、只點了某一列」時使用。
-        /// </summary>
-        private AudioMapItem _activeItem;
-        /// <summary>
-        /// 「功能代號」欄位取得焦點當下的原始值,LostFocus 時拿來跟目前值比對,
-        /// 只有真的異動過才驗證重複,避免「警告後把焦點搶回來」這個動作本身(值沒變)又觸發下一輪驗證,
-        /// 兩列都重複時互搶焦點形成無窮迴圈。
-        /// </summary>
-        private string _codeValueOnFocus;
-        /// <summary>「音效檔路徑」欄位取得焦點當下的原始值,LostFocus 時比對是否真的異動過,判斷要不要記錄復原快照。</summary>
-        private string _filePathValueOnFocus;
-        /// <summary>
-        /// 進入「功能代號」或「音效檔路徑」欄位編輯前的整份對照表快照,離開欄位時如果值真的變了才會推進 _undoStack。
-        /// </summary>
-        private List<AudioMapItem> _editSnapshot;
-        /// <summary>復原堆疊,每筆是異動前的整份對照表快照(深複製,不跟目前 _items 共用物件)。</summary>
-        private Stack<List<AudioMapItem>> _undoStack = new Stack<List<AudioMapItem>>();
+
+        /// <summary>復原堆疊,每筆是異動前的整份對照表快照(深複製,不跟 _items 共用物件)。</summary>
+        private readonly Stack<List<AudioMapRow>> _undoStack = new Stack<List<AudioMapRow>>();
         /// <summary>取消復原堆疊,存放被復原掉的狀態,復原後又做新異動時會被清空。</summary>
-        private Stack<List<AudioMapItem>> _redoStack = new Stack<List<AudioMapItem>>();
+        private readonly Stack<List<AudioMapRow>> _redoStack = new Stack<List<AudioMapRow>>();
+
+        /// <summary>「最大音量」頁簽開始/暫停/停止背後實際的播放引擎(MediaPlayer 包裝)。</summary>
+        private readonly PlaybackController _playback = new PlaybackController();
+
+        /// <summary>
+        /// 正在用程式(而不是使用者拖曳)更新底部兩條進度條的 Value 時設成 true,
+        /// 讓 SliderOpeningPosition_ValueChanged/SliderLoopPosition_ValueChanged 知道要忽略這次變化,
+        /// 不然每次同步畫面都會被誤判成使用者拖曳,反過來又呼叫 _playback.SeekWithin...,形成迴圈。
+        /// </summary>
+        private bool _isSyncingPositionSliders;
 
         public MainWindow()
         {
             InitializeComponent();
 
-            // 建立空白對照表資料來源,綁定給 DataGrid 顯示
-            _items = new ObservableCollection<AudioMapItem>();
-            dgAudioMap.ItemsSource = _items;
+            pathMapControl.Items = _items;
+            openingSegmentControl.Items = _items;
+            loopSegmentControl.Items = _items;
+            maxVolumeControl.Items = _items;
+
+            pathMapControl.ActiveItemChanged += Control_ActiveItemChanged;
+            openingSegmentControl.ActiveItemChanged += Control_ActiveItemChanged;
+            loopSegmentControl.ActiveItemChanged += Control_ActiveItemChanged;
+            maxVolumeControl.ActiveItemChanged += Control_ActiveItemChanged;
+
+            pathMapControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
+            openingSegmentControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
+            loopSegmentControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
+            maxVolumeControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
+
+            maxVolumeControl.PlayRequested += MaxVolumeControl_PlayRequested;
+            maxVolumeControl.PauseRequested += MaxVolumeControl_PauseRequested;
+            maxVolumeControl.StopRequested += MaxVolumeControl_StopRequested;
+            _playback.PlaybackFailed += Playback_PlaybackFailed;
+            _playback.PositionChanged += Playback_PositionChanged;
+        }
+
+        /// <summary>
+        /// 「資料夾」欄位右側的「...」按鈕:跳出資料夾選擇對話框,選好後同時更新顯示的文字跟
+        /// pathMapControl.FolderPath(「路徑」頁簽的「音效檔名稱」欄要等這裡有值才能用)。
+        /// </summary>
+        private void BtnBrowseFolder_Click(object sender, RoutedEventArgs e)
+        {
+            using (System.Windows.Forms.FolderBrowserDialog dlg = new System.Windows.Forms.FolderBrowserDialog())
+            {
+                if (!string.IsNullOrEmpty(txtFolder.Text) && Directory.Exists(txtFolder.Text))
+                    dlg.SelectedPath = txtFolder.Text;
+
+                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                    return;
+
+                SetFolder(dlg.SelectedPath);
+            }
+        }
+
+        /// <summary>把「資料夾」欄位(txtFolder 顯示 + pathMapControl.FolderPath)一起設成指定的資料夾路徑。</summary>
+        private void SetFolder(string folder)
+        {
+            txtFolder.Text = folder;
+            pathMapControl.FolderPath = folder;
+        }
+
+        private void Control_ActiveItemChanged(object sender, AudioMapRow item)
+        {
+            _activeItem = item;
+        }
+
+        private void Control_UndoSnapshotRequested(object sender, List<AudioMapRow> snapshotBeforeChange)
+        {
+            PushUndoSnapshot(snapshotBeforeChange);
+        }
+
+        /// <summary>
+        /// 「最大音量」頁簽按下「開始」:未播放過(或已停止)時從開場片段重頭播,暫停中時接續播放。
+        /// 播放成功才鎖其他列、鎖選單/工具列;播放失敗(檔案不存在、時間格式不對...等)維持原狀不鎖。
+        /// </summary>
+        private void MaxVolumeControl_PlayRequested(object sender, AudioMapRow row)
+        {
+            if (!_playback.Play(row, txtFolder.Text))
+                return;
+
+            LockOtherRows(row);
+            SetGlobalControlsEnabled(false);
+        }
+
+        /// <summary>「最大音量」頁簽按下「暫停」:保留播放位置暫停,其他列、選單/工具列維持鎖定。</summary>
+        private void MaxVolumeControl_PauseRequested(object sender, AudioMapRow row)
+        {
+            _playback.Pause();
+        }
+
+        /// <summary>「最大音量」頁簽按下「停止」:停止播放,解除所有列跟選單/工具列的鎖定。</summary>
+        private void MaxVolumeControl_StopRequested(object sender, AudioMapRow row)
+        {
+            _playback.Stop();
+            UnlockAllRows();
+            SetGlobalControlsEnabled(true);
+        }
+
+        private void Playback_PlaybackFailed(object sender, string message)
+        {
+            MessageBox.Show(message, "播放失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        /// <summary>
+        /// 播放位置變化時(播放中每 100ms 一次、暫停/開始/停止/拖曳進度條各一次)同步底部兩條進度條:
+        /// 「開場片段」進度條顯示在開場片段內的進度,進入循環片段後固定顯示滿格;
+        /// 「循環片段」進度條只有進入循環片段時才顯示進度,還沒進入時固定顯示 0。
+        /// 兩條進度條是否能拖看目前是不是暫停中(播放中/沒有播放都不能拖),「循環片段」進度條額外要求
+        /// 已經進入循環片段(IsInLoopStage,等同「開場片段」進度條滿了);另外,任何一段的開始時間跟
+        /// 結束時間相同(長度 0、沒有範圍可拖)時,對應的那條進度條直接鎖住不能用。
+        /// </summary>
+        private void Playback_PositionChanged(object sender, EventArgs e)
+        {
+            AudioMapRow row = _playback.PlayingRow;
+            if (row == null)
+            {
+                ResetPositionBars();
+                return;
+            }
+
+            bool isPaused = row.PlaybackState == RowPlaybackState.Paused;
+            bool isInLoop = _playback.IsInLoopStage;
+
+            TimeSpan openingDuration = _playback.OpeningEnd - _playback.OpeningStart;
+            TimeSpan loopDuration = _playback.LoopEnd - _playback.LoopStart;
+            TimeSpan position = _playback.CurrentPosition;
+
+            bool openingHasRange = openingDuration > TimeSpan.Zero;
+            bool loopHasRange = loopDuration > TimeSpan.Zero;
+
+            TimeSpan openingElapsed = isInLoop
+                ? openingDuration
+                : ClampTimeSpan(position - _playback.OpeningStart, TimeSpan.Zero, openingDuration);
+            TimeSpan loopElapsed = isInLoop
+                ? ClampTimeSpan(position - _playback.LoopStart, TimeSpan.Zero, loopDuration)
+                : TimeSpan.Zero;
+
+            double openingMax = Math.Max(0.001, openingDuration.TotalSeconds);
+            double loopMax = Math.Max(0.001, loopDuration.TotalSeconds);
+
+            _isSyncingPositionSliders = true;
+            try
+            {
+                sliderOpeningPosition.Maximum = openingMax;
+                sliderLoopPosition.Maximum = loopMax;
+
+                // isInLoop 時直接把 Value 設成 Maximum(顯示滿格),不用 openingElapsed 的原始計算值——
+                // 長度 0 時 openingElapsed 會是 0,但 Maximum 被墊高到 0.001,兩者對不起來會顯得「沒滿」。
+                sliderOpeningPosition.Value = isInLoop ? openingMax : openingElapsed.TotalSeconds;
+                sliderLoopPosition.Value = loopElapsed.TotalSeconds;
+
+                sliderOpeningPosition.IsEnabled = isPaused && openingHasRange;
+                sliderLoopPosition.IsEnabled = isPaused && isInLoop && loopHasRange;
+            }
+            finally
+            {
+                _isSyncingPositionSliders = false;
+            }
+
+            txtOpeningPosition.Text = TimecodeFormat.Format(_playback.OpeningStart + openingElapsed);
+            txtLoopPosition.Text = TimecodeFormat.Format(_playback.LoopStart + loopElapsed);
+        }
+
+        /// <summary>沒有列在播放/暫停時,底部兩條進度條都反灰並歸零。</summary>
+        private void ResetPositionBars()
+        {
+            _isSyncingPositionSliders = true;
+            try
+            {
+                sliderOpeningPosition.IsEnabled = false;
+                sliderLoopPosition.IsEnabled = false;
+                sliderOpeningPosition.Value = 0;
+                sliderLoopPosition.Value = 0;
+            }
+            finally
+            {
+                _isSyncingPositionSliders = false;
+            }
+
+            txtOpeningPosition.Text = "00:00:00:0000";
+            txtLoopPosition.Text = "00:00:00:0000";
+        }
+
+        /// <summary>使用者拖曳「開場片段」進度條:定位到開場片段內對應的時間點(只有程式自己同步畫面時才忽略)。</summary>
+        private void SliderOpeningPosition_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingPositionSliders)
+                return;
+
+            _playback.SeekWithinOpening(TimeSpan.FromSeconds(e.NewValue));
+        }
+
+        /// <summary>使用者拖曳「循環片段」進度條:定位到循環片段內對應的時間點(只有程式自己同步畫面時才忽略)。</summary>
+        private void SliderLoopPosition_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_isSyncingPositionSliders)
+                return;
+
+            _playback.SeekWithinLoop(TimeSpan.FromSeconds(e.NewValue));
+        }
+
+        /// <summary>
+        /// 點一下底部進度條旁邊的時間文字,把目前顯示的時間(HH:mm:ss:ffff)複製到剪貼簿,
+        /// 方便貼到「開場片段」「循環片段」頁簽的時間欄位。
+        /// </summary>
+        private void TxtPosition_Click(object sender, MouseButtonEventArgs e)
+        {
+            TextBlock tb = sender as TextBlock;
+            if (tb == null || string.IsNullOrEmpty(tb.Text))
+                return;
+
+            try
+            {
+                Clipboard.SetText(tb.Text);
+            }
+            catch (Exception)
+            {
+                // 剪貼簿偶爾會被其他程式短暫佔用而丟例外,複製失敗就算了,不影響其他操作
+            }
+        }
+
+        private static TimeSpan ClampTimeSpan(TimeSpan value, TimeSpan min, TimeSpan max)
+        {
+            if (value < min)
+                return min;
+            if (value > max)
+                return max;
+            return value;
+        }
+
+        /// <summary>把除了 playingRow 以外的每一列都標成「被播放鎖定」,四個頁簽的畫面會跟著整列反灰。</summary>
+        private void LockOtherRows(AudioMapRow playingRow)
+        {
+            foreach (AudioMapRow item in _items)
+            {
+                if (item != playingRow)
+                    item.IsPlaybackLocked = true;
+            }
+        }
+
+        /// <summary>解除所有列的播放鎖定(停止播放時呼叫)。</summary>
+        private void UnlockAllRows()
+        {
+            foreach (AudioMapRow item in _items)
+            {
+                item.IsPlaybackLocked = false;
+            }
+        }
+
+        /// <summary>播放/暫停期間把選單跟工具列整排鎖住(含 Ctrl+S/Z/Y,見 Window_KeyDown),避免異動到正在播放的資料。</summary>
+        private void SetGlobalControlsEnabled(bool enabled)
+        {
+            mainMenu.IsEnabled = enabled;
+            toolbarPanel.IsEnabled = enabled;
         }
 
         #endregion
@@ -74,9 +305,13 @@ namespace AudioMapTool
 
         /// <summary>
         /// 整個視窗共用的快捷鍵:Ctrl+S 存檔、Ctrl+Z 復原、Ctrl+Y 取消復原,行為分別跟按選單的對應項目相同。
+        /// 播放/暫停中(mainMenu 被鎖住時)這些快捷鍵也要一併停用,不然會繞過選單被鎖住的畫面直接異動資料。
         /// </summary>
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
+            if (!mainMenu.IsEnabled)
+                return;
+
             if (Keyboard.Modifiers != ModifierKeys.Control)
                 return;
 
@@ -104,12 +339,12 @@ namespace AudioMapTool
         /// <summary>
         /// 把目前對照表整份深複製一份(每筆資料都是新物件,不跟 _items 共用參考),當作一次快照。
         /// </summary>
-        private List<AudioMapItem> CloneItems()
+        private List<AudioMapRow> CloneItems()
         {
-            List<AudioMapItem> clone = new List<AudioMapItem>();
-            foreach (AudioMapItem item in _items)
+            List<AudioMapRow> clone = new List<AudioMapRow>();
+            foreach (AudioMapRow item in _items)
             {
-                clone.Add(new AudioMapItem { Code = item.Code, FilePath = item.FilePath, IsSelected = item.IsSelected });
+                clone.Add(item.Clone());
             }
 
             return clone;
@@ -118,15 +353,15 @@ namespace AudioMapTool
         /// <summary>
         /// 把整份對照表換成指定的快照內容(直接沿用快照裡的物件,因為快照本身已經是專屬、沒有共用的複本)。
         /// </summary>
-        private void ApplySnapshot(List<AudioMapItem> snapshot)
+        private void ApplySnapshot(List<AudioMapRow> snapshot)
         {
             _items.Clear();
-            foreach (AudioMapItem item in snapshot)
+            foreach (AudioMapRow item in snapshot)
             {
                 _items.Add(item);
             }
 
-            // 換過整份資料後,舊的作用列/編輯狀態參考已經不是目前清單裡的物件,清掉避免後續操作指到不存在的資料
+            // 換過整份資料後,舊的作用列參考已經不是目前清單裡的物件,清掉避免後續操作指到不存在的資料
             _activeItem = null;
         }
 
@@ -134,16 +369,13 @@ namespace AudioMapTool
         /// 在一次異動動作「開始前」呼叫,把異動前的快照推進復原堆疊,並清空取消復原堆疊
         /// (標準 Undo/Redo 慣例:只要發生新的異動,先前被復原掉的分支就不再能取消復原)。
         /// </summary>
-        private void PushUndoSnapshot(List<AudioMapItem> snapshotBeforeChange)
+        private void PushUndoSnapshot(List<AudioMapRow> snapshotBeforeChange)
         {
             _undoStack.Push(snapshotBeforeChange);
             _redoStack.Clear();
             UpdateUndoRedoMenuState();
         }
 
-        /// <summary>
-        /// 復原:把目前狀態存進取消復原堆疊,再取出復原堆疊最上面那份快照套用回去。
-        /// </summary>
         private void Undo()
         {
             if (_undoStack.Count == 0)
@@ -154,9 +386,6 @@ namespace AudioMapTool
             UpdateUndoRedoMenuState();
         }
 
-        /// <summary>
-        /// 取消復原:把目前狀態存進復原堆疊,再取出取消復原堆疊最上面那份快照套用回去。
-        /// </summary>
         private void Redo()
         {
             if (_redoStack.Count == 0)
@@ -167,9 +396,6 @@ namespace AudioMapTool
             UpdateUndoRedoMenuState();
         }
 
-        /// <summary>
-        /// 依堆疊目前是否有內容,更新「復原」「取消復原」選單項目能不能點。
-        /// </summary>
         private void UpdateUndoRedoMenuState()
         {
             miUndo.IsEnabled = _undoStack.Count > 0;
@@ -221,7 +447,7 @@ namespace AudioMapTool
             }
         }
         /// <summary>
-        /// 新增:清空目前的對照表內容,回到「尚未開啟任何檔案」的狀態,重新開始編輯。
+        /// 新增:清空對照表內容,回到「尚未開啟任何檔案」的狀態,重新開始編輯。
         /// </summary>
         private void DoNew()
         {
@@ -232,7 +458,9 @@ namespace AudioMapTool
             Title = "音效檔對照表";
         }
         /// <summary>
-        /// 開啟:選一個 ini 檔,依 "[功能代號]" + "Path=路徑" 的區段格式解析後,整批取代目前的對照表內容。
+        /// 開啟:選一個 ini 檔,依 "[功能代號]" + "欄位=值" 的區段格式解析後,整批取代目前的對照表內容。
+        /// 「資料夾」欄位也會順便改成這個 ini 檔所在的資料夾(常見情況是音效檔跟 ini 檔放在一起),
+        /// 使用者不滿意的話可以再自己用「...」按鈕重新選。
         /// </summary>
         private void DoOpen()
         {
@@ -249,7 +477,7 @@ namespace AudioMapTool
                 _items.Clear();
 
                 string[] lines = File.ReadAllLines(dlg.FileName, Encoding.UTF8);
-                AudioMapItem currentItem = null;
+                AudioMapRow currentItem = null;
 
                 foreach (string rawLine in lines)
                 {
@@ -260,7 +488,7 @@ namespace AudioMapTool
                     // "[功能代號]" 這種格式代表新的 Section,開始一筆新資料
                     if (line.StartsWith("[") && line.EndsWith("]"))
                     {
-                        currentItem = new AudioMapItem { Code = line.Substring(1, line.Length - 2).Trim() };
+                        currentItem = new AudioMapRow { Code = line.Substring(1, line.Length - 2).Trim() };
                         _items.Add(currentItem);
                         continue;
                     }
@@ -275,12 +503,12 @@ namespace AudioMapTool
                     string key = line.Substring(0, idx).Trim();
                     string value = line.Substring(idx + 1).Trim();
 
-                    if (string.Equals(key, "Path", StringComparison.OrdinalIgnoreCase))
-                        currentItem.FilePath = value;
+                    SetField(currentItem, key, value);
                 }
 
                 _currentFilePath = dlg.FileName;
                 Title = "音效檔對照表 - " + Path.GetFileName(_currentFilePath);
+                SetFolder(Path.GetDirectoryName(_currentFilePath));
             }
             catch (Exception ex)
             {
@@ -317,21 +545,27 @@ namespace AudioMapTool
             Title = "音效檔對照表 - " + Path.GetFileName(_currentFilePath);
         }
         /// <summary>
-        /// 把目前對照表內容依 ini 格式寫出到指定檔案(UTF-8):每筆資料一個 Section,
-        /// "[功能代號]" 接著一行 "Path=音效檔路徑"。代號空白的列會被略過,不寫進檔案。
+        /// 把對照表內容依 ini 格式寫出到指定檔案(UTF-8):每筆資料一個 Section,
+        /// "[功能代號]" 接著 FileName/SStart/SEnd/CStart/CEnd/MaxS 六個欄位。代號空白的列會被略過,不寫進檔案。
+        /// FileName 只存檔名(不含資料夾路徑),「資料夾」是每台電腦各自在工具列選的,不會寫進這個檔案。
         /// </summary>
         private void SaveToFile(string filePath)
         {
             try
             {
                 StringBuilder sb = new StringBuilder();
-                foreach (AudioMapItem item in _items)
+                foreach (AudioMapRow item in _items)
                 {
                     if (string.IsNullOrWhiteSpace(item.Code))
                         continue;
 
                     sb.AppendLine("[" + item.Code + "]");
-                    sb.AppendLine("Path=" + item.FilePath);
+                    sb.AppendLine("FileName=" + item.FileName);
+                    sb.AppendLine("SStart=" + item.SStart);
+                    sb.AppendLine("SEnd=" + item.SEnd);
+                    sb.AppendLine("CStart=" + item.CStart);
+                    sb.AppendLine("CEnd=" + item.CEnd);
+                    sb.AppendLine("MaxS=" + item.MaxS);
                     sb.AppendLine();
                 }
 
@@ -342,224 +576,28 @@ namespace AudioMapTool
                 MessageBox.Show("存檔失敗:" + ex.Message, "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+        /// <summary>依 ini 檔讀到的 Key,把值設回對照表資料對應的欄位;不認得的 Key 直接略過。</summary>
+        private static void SetField(AudioMapRow item, string key, string value)
+        {
+            if (string.Equals(key, "FileName", StringComparison.OrdinalIgnoreCase))
+                item.FileName = value;
+            else if (string.Equals(key, "SStart", StringComparison.OrdinalIgnoreCase))
+                item.SStart = value;
+            else if (string.Equals(key, "SEnd", StringComparison.OrdinalIgnoreCase))
+                item.SEnd = value;
+            else if (string.Equals(key, "CStart", StringComparison.OrdinalIgnoreCase))
+                item.CStart = value;
+            else if (string.Equals(key, "CEnd", StringComparison.OrdinalIgnoreCase))
+                item.CEnd = value;
+            else if (string.Equals(key, "MaxS", StringComparison.OrdinalIgnoreCase))
+                item.MaxS = value;
+        }
         /// <summary>
         /// 關閉:直接關掉整個視窗。
         /// </summary>
         private void DoClose()
         {
             Close();
-        }
-
-        #endregion
-
-        #region DataGrid 儲存格功能(目前作用列追蹤/功能代號重複驗證/音效檔查詢)
-
-        /// <summary>
-        /// 「功能代號」「音效檔路徑」兩欄的 TextBox 共用:只要使用者點進(取得焦點)該列任一欄位,
-        /// 就把該列資料記到 _activeItem,供工具列的新增/刪除/拷貝按鈕判斷「目前作用列」。
-        /// </summary>
-        private void TxtRow_GotFocus(object sender, RoutedEventArgs e)
-        {
-            FrameworkElement fe = sender as FrameworkElement;
-            if (fe == null)
-                return;
-
-            _activeItem = fe.DataContext as AudioMapItem;
-        }
-        /// <summary>
-        /// 「功能代號」欄位取得焦點:除了跟 TxtRow_GotFocus 一樣記錄目前作用列,
-        /// 還要多記錄「取得焦點當下的原始值」,給 LostFocus 判斷這次是否真的有異動過。
-        /// </summary>
-        private void TxtCode_GotFocus(object sender, RoutedEventArgs e)
-        {
-            TxtRow_GotFocus(sender, e);
-
-            TextBox tb = sender as TextBox;
-            AudioMapItem item = tb == null ? null : tb.DataContext as AudioMapItem;
-            _codeValueOnFocus = item == null ? null : item.Code;
-            _editSnapshot = CloneItems();
-        }
-        /// <summary>
-        /// 「音效檔路徑」欄位取得焦點:除了跟 TxtRow_GotFocus 一樣記錄目前作用列,
-        /// 還要多記錄「取得焦點當下的原始值」跟復原快照,給 LostFocus 判斷這次是否真的有異動過。
-        /// </summary>
-        private void TxtFilePath_GotFocus(object sender, RoutedEventArgs e)
-        {
-            TxtRow_GotFocus(sender, e);
-
-            TextBox tb = sender as TextBox;
-            AudioMapItem item = tb == null ? null : tb.DataContext as AudioMapItem;
-            _filePathValueOnFocus = item == null ? null : item.FilePath;
-            _editSnapshot = CloneItems();
-        }
-        /// <summary>
-        /// 「功能代號」欄位游標離開時的驗證:異動後若不為空,檢查其他列有沒有相同代號。
-        /// 有重複就跳出提示,按確定後把焦點/選取範圍設回同一個 TextBox,方便使用者原地修改。
-        /// 只有這次真的改過值才會驗證——值沒變(例如上一輪警告後把焦點搶回來)就直接放行,
-        /// 否則兩列本來就重複時,搶焦點的動作本身會不斷互相觸發驗證,形成無窮迴圈。
-        /// </summary>
-        private void TxtCode_LostFocus(object sender, RoutedEventArgs e)
-        {
-            TextBox tb = sender as TextBox;
-            if (tb == null)
-                return;
-
-            AudioMapItem currentItem = tb.DataContext as AudioMapItem;
-            if (currentItem == null)
-                return;
-
-            string newCode = currentItem.Code;
-            if (newCode == _codeValueOnFocus)
-                return;
-
-            // 這次真的異動過代號,記錄復原快照(用取得焦點當下捕捉的那份,代表異動前的狀態)
-            if (_editSnapshot != null)
-                PushUndoSnapshot(_editSnapshot);
-
-            if (string.IsNullOrEmpty(newCode))
-                return;
-
-            // 排除自己這一列,檢查其他列是否已經有相同的功能代號
-            bool duplicate = _items.Any(p => p != currentItem && p.Code == newCode);
-            if (!duplicate)
-                return;
-
-            MessageBox.Show("已存在相同功能代號", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-
-            // 用 Background 優先權延後執行,確保排在這次「切換焦點」的處理完成之後,
-            // 才把焦點/選取範圍設回原本的 TextBox,不會又被蓋回去
-            Dispatcher.BeginInvoke(new Action(delegate
-            {
-                // 反藍(目前儲存格)也要跟著一起指向回這一列的功能代號欄位,不然會停在切換前點的儲存格上
-                DataGridCellInfo cellInfo = new DataGridCellInfo(currentItem, colCode);
-                dgAudioMap.CurrentCell = cellInfo;
-                dgAudioMap.SelectedCells.Clear();
-                dgAudioMap.SelectedCells.Add(cellInfo);
-
-                tb.Focus();
-                tb.SelectAll();
-            }), DispatcherPriority.Background);
-        }
-        /// <summary>
-        /// 「音效檔路徑」欄位游標離開時:只要值真的異動過,就把取得焦點當下的快照推進復原堆疊。
-        /// </summary>
-        private void TxtFilePath_LostFocus(object sender, RoutedEventArgs e)
-        {
-            TextBox tb = sender as TextBox;
-            if (tb == null)
-                return;
-
-            AudioMapItem currentItem = tb.DataContext as AudioMapItem;
-            if (currentItem == null)
-                return;
-
-            if (currentItem.FilePath == _filePathValueOnFocus)
-                return;
-
-            if (_editSnapshot != null)
-                PushUndoSnapshot(_editSnapshot);
-        }
-        /// <summary>
-        /// 「音效檔路徑」欄位右側查詢按鈕:跳出 OpenFileDialog 選音效檔,選好後把路徑寫回該列的 FilePath。
-        /// </summary>
-        private void BtnBrowseAudio_Click(object sender, RoutedEventArgs e)
-        {
-            Button btn = sender as Button;
-            AudioMapItem item = btn == null ? null : btn.DataContext as AudioMapItem;
-            if (item == null)
-                return;
-
-            OpenFileDialog dlg = new OpenFileDialog();
-            dlg.Filter = "音效檔 (*.wav;*.mp3;*.wma)|*.wav;*.mp3;*.wma|所有檔案 (*.*)|*.*";
-
-            // 該列原本已經有有效路徑的話,對話框預設定位到那個檔案
-            if (!string.IsNullOrEmpty(item.FilePath) && File.Exists(item.FilePath))
-                dlg.FileName = item.FilePath;
-
-            if (dlg.ShowDialog() == true)
-            {
-                PushUndoSnapshot(CloneItems());
-                item.FilePath = dlg.FileName;
-            }
-        }
-        /// <summary>
-        /// 快捷鍵:「功能代號」「音效檔路徑」任一欄位游標所在時按 Enter,
-        /// 在目前這一列後面自動插入一筆空白列,並把游標移到新那一列的「功能代號」欄位。
-        /// </summary>
-        private void TxtRow_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key != Key.Enter)
-                return;
-
-            TextBox tb = sender as TextBox;
-            if (tb == null)
-                return;
-
-            AudioMapItem currentItem = tb.DataContext as AudioMapItem;
-            if (currentItem == null)
-                return;
-
-            // 攔下 Enter,避免多行輸入或系統警示音
-            e.Handled = true;
-
-            PushUndoSnapshot(CloneItems());
-
-            int insertIndex = _items.IndexOf(currentItem) + 1;
-            AudioMapItem newItem = new AudioMapItem();
-            _items.Insert(insertIndex, newItem);
-
-            // 新列的容器要等這次資料異動的版面更新跑完才會真正產生,
-            // 用 Background 優先權延後執行,確保抓得到新列的 TextBox
-            Dispatcher.BeginInvoke(new Action(delegate
-            {
-                FocusCodeTextBox(newItem);
-            }), DispatcherPriority.Background);
-        }
-
-        /// <summary>
-        /// 把游標移到指定列「功能代號」欄位的 TextBox(x:Name="txtCode")上。
-        /// </summary>
-        private void FocusCodeTextBox(AudioMapItem item)
-        {
-            dgAudioMap.UpdateLayout();
-            dgAudioMap.ScrollIntoView(item);
-            dgAudioMap.UpdateLayout();
-
-            // 把 DataGrid 自己的目前儲存格/選取範圍也一併移過去,反藍才會跟著游標一起切換
-            DataGridCellInfo cellInfo = new DataGridCellInfo(item, colCode);
-            dgAudioMap.CurrentCell = cellInfo;
-            dgAudioMap.SelectedCells.Clear();
-            dgAudioMap.SelectedCells.Add(cellInfo);
-
-            DataGridRow row = dgAudioMap.ItemContainerGenerator.ContainerFromItem(item) as DataGridRow;
-            if (row == null)
-                return;
-
-            TextBox txtCode = FindVisualChildByName<TextBox>(row, "txtCode");
-            if (txtCode != null)
-                txtCode.Focus();
-        }
-
-        /// <summary>
-        /// 依名稱在視覺樹底下遞迴尋找指定型別的子控件(用於定位 DataGrid 儲存格內、自訂 DataTemplate 產生的 x:Name 控件)。
-        /// </summary>
-        private static T FindVisualChildByName<T>(DependencyObject parent, string name) where T : FrameworkElement
-        {
-            int count = VisualTreeHelper.GetChildrenCount(parent);
-            for (int i = 0; i < count; i++)
-            {
-                DependencyObject child = VisualTreeHelper.GetChild(parent, i);
-
-                T result = child as T;
-                if (result != null && result.Name == name)
-                    return result;
-
-                result = FindVisualChildByName<T>(child, name);
-                if (result != null)
-                    return result;
-            }
-
-            return null;
         }
 
         #endregion
@@ -599,21 +637,21 @@ namespace AudioMapTool
             }
         }
         /// <summary>
-        /// 全選:把目前對照表所有列的「選」勾選狀態都打勾。
+        /// 全選:把所有列的「選」勾選狀態都打勾。
         /// </summary>
         private void DoSelectAll()
         {
-            foreach (AudioMapItem item in _items)
+            foreach (AudioMapRow item in _items)
             {
                 item.IsSelected = true;
             }
         }
         /// <summary>
-        /// 反選:把目前對照表所有列的「選」勾選狀態反轉(打勾變沒打勾,反之亦然)。
+        /// 反選:把所有列的「選」勾選狀態反轉(打勾變沒打勾,反之亦然)。
         /// </summary>
         private void DoInvertSelect()
         {
-            foreach (AudioMapItem item in _items)
+            foreach (AudioMapRow item in _items)
             {
                 item.IsSelected = !item.IsSelected;
             }
@@ -626,10 +664,10 @@ namespace AudioMapTool
         {
             PushUndoSnapshot(CloneItems());
 
-            AudioMapItem selected = _activeItem;
+            AudioMapRow selected = _activeItem;
             int insertIndex = selected == null ? _items.Count : _items.IndexOf(selected) + 1;
 
-            _items.Insert(insertIndex, new AudioMapItem());
+            _items.Insert(insertIndex, new AudioMapRow());
         }
         /// <summary>
         /// 刪除:
@@ -638,7 +676,7 @@ namespace AudioMapTool
         /// </summary>
         private void DoDelete()
         {
-            List<AudioMapItem> checkedItems = _items.Where(p => p.IsSelected).ToList();
+            List<AudioMapRow> checkedItems = _items.Where(p => p.IsSelected).ToList();
 
             if (checkedItems.Count > 0)
             {
@@ -648,7 +686,7 @@ namespace AudioMapTool
 
                 PushUndoSnapshot(CloneItems());
 
-                foreach (AudioMapItem item in checkedItems)
+                foreach (AudioMapRow item in checkedItems)
                 {
                     _items.Remove(item);
                 }
@@ -656,7 +694,7 @@ namespace AudioMapTool
                 return;
             }
 
-            AudioMapItem selected = _activeItem;
+            AudioMapRow selected = _activeItem;
             if (selected != null)
             {
                 MessageBoxResult result = MessageBox.Show("是否刪除" + selected.Code + "?", "確認刪除", MessageBoxButton.YesNo, MessageBoxImage.Question);
@@ -675,38 +713,37 @@ namespace AudioMapTool
         /// </summary>
         private void DoCopy()
         {
-            List<AudioMapItem> checkedItems = _items.Where(p => p.IsSelected).ToList();
+            List<AudioMapRow> checkedItems = _items.Where(p => p.IsSelected).ToList();
 
             if (checkedItems.Count > 0)
             {
                 PushUndoSnapshot(CloneItems());
 
-                foreach (AudioMapItem item in checkedItems)
+                foreach (AudioMapRow item in checkedItems)
                 {
                     item.IsSelected = false;
 
-                    _items.Add(new AudioMapItem
-                    {
-                        Code = item.Code + "_COPY",
-                        FilePath = item.FilePath
-                    });
+                    AudioMapRow copy = item.Clone();
+                    copy.Code = item.Code + "_COPY";
+                    copy.IsSelected = false;
+
+                    _items.Add(copy);
                 }
 
                 return;
             }
 
-            AudioMapItem selected = _activeItem;
+            AudioMapRow selected = _activeItem;
             if (selected != null)
             {
                 PushUndoSnapshot(CloneItems());
 
                 int insertIndex = _items.IndexOf(selected) + 1;
 
-                _items.Insert(insertIndex, new AudioMapItem
-                {
-                    Code = selected.Code + "_COPY",
-                    FilePath = selected.FilePath
-                });
+                AudioMapRow copy = selected.Clone();
+                copy.Code = selected.Code + "_COPY";
+
+                _items.Insert(insertIndex, copy);
             }
         }
 
