@@ -22,6 +22,10 @@ namespace AudioMapTool.Services
     /// 播放中自動跟著移動(不能拖),暫停中可以拖——開場片段進度條隨時能拖,循環片段進度條只有
     /// 「已經進入循環片段」(IsInLoopStage,即開場片段進度條已經滿了)時才能拖。
     /// 同一時間只會有一列在播放/暫停,呼叫端(MainWindow)負責在開始播放時鎖住其他列的畫面。
+    /// 另外用 Preload() 支援「提前預先開啟」:MediaPlayer.Open() 是非同步的,讀檔、初始化解碼器需要時間,
+    /// 切換音樂時常常會有一下卡頓感就是在等這個。MainWindow 會在使用者把游標移到某一列時呼叫 Preload,
+    /// 用一顆待命的 MediaPlayer 提前把那個檔案開好;等真的按下「開始」、剛好是同一列時,Play() 就直接接手
+    /// 這顆已經開好的播放器,不用再等一次 Open(),明顯減少切換的空檔。
     /// </summary>
     public class PlaybackController
     {
@@ -37,7 +41,8 @@ namespace AudioMapTool.Services
         /// 壓縮格式(如 MP3)的音框邊界,再短也不會是逐取樣精準。</summary>
         private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(20);
 
-        private readonly MediaPlayer _player = new MediaPlayer();
+        /// <summary>目前實際播放用的播放器。按「開始」時如果剛好接手了預載好的 _standbyPlayer,這個參考會換成它。</summary>
+        private MediaPlayer _player = new MediaPlayer();
         private readonly DispatcherTimer _timer;
 
         private AudioMapRow _row;
@@ -46,6 +51,15 @@ namespace AudioMapTool.Services
         private TimeSpan _loopStart;
         private TimeSpan _loopEnd;
         private Stage _stage;
+
+        /// <summary>提前預先開啟中(或已開好)的待命播放器;沒有在預載時是 null。</summary>
+        private MediaPlayer _standbyPlayer;
+        /// <summary>_standbyPlayer 對應要播放的列。</summary>
+        private AudioMapRow _preloadRow;
+        /// <summary>_standbyPlayer 已經 Open() 的完整檔案路徑,Play() 時要比對是不是同一個檔案。</summary>
+        private string _preloadFullPath;
+        /// <summary>_standbyPlayer 是不是已經真的開啟完成(MediaOpened 已觸發),可以直接接手播放。</summary>
+        private bool _standbyReady;
 
         /// <summary>目前正在播放/暫停中的列;沒有播放時是 null。</summary>
         public AudioMapRow PlayingRow
@@ -146,17 +160,133 @@ namespace AudioMapTool.Services
             _loopStart = loopStart;
             _loopEnd = loopEnd;
             _stage = Stage.Opening;
-
-            // Position/Play()/計時器都延後到 Player_MediaOpened 才開始——MediaPlayer.Open() 是非同步的,
-            // 音效檔實際總長度(NaturalDuration)要等 MediaOpened 觸發才知道,必須先等這個才能做「時間欄位
-            // 超過音樂總長度就夾回去」的檢查(見 ClampRowTimesToNaturalDuration)。
-            _player.Open(new Uri(fullPath));
-            _player.Volume = ParseVolume(row.MaxS);
             row.PropertyChanged += Row_PropertyChanged;
-
             row.PlaybackState = RowPlaybackState.Playing;
+
+            if (!TryUsePreloadedPlayer(row, fullPath))
+            {
+                // 沒有可用的預載(或還沒開完、或預載的是別的列),就清掉舊的待命播放器,
+                // 走原本「開檔 → 等 MediaOpened → 才真正播放」的流程。Position/Play()/計時器都延後到
+                // Player_MediaOpened 才開始——MediaPlayer.Open() 是非同步的,音效檔實際總長度
+                // (NaturalDuration)要等 MediaOpened 觸發才知道,必須先等這個才能做「時間欄位超過
+                // 音樂總長度就夾回去」的檢查(見 ClampRowTimesToNaturalDuration)。
+                ClearPreload();
+                _player.Open(new Uri(fullPath));
+                _player.Volume = ParseVolume(row.MaxS);
+            }
+
             RaisePositionChanged();
             return true;
+        }
+
+        /// <summary>
+        /// 提前預先開啟指定列的音效檔(不會播放),讓之後真的按「開始」、剛好是同一列時可以直接接手,
+        /// 省掉 MediaPlayer.Open() 讀檔/初始化解碼器的等待時間,減少切換音樂時的卡頓感。
+        /// 只有「目前沒有任何列在播放/暫停」時才會預載(避免干擾正在進行的播放);找不到有效的
+        /// 資料夾/檔名/檔案、或這一列已經預載過了,就直接不做事、不會顯示任何錯誤——這只是投機性的
+        /// 背景動作,真正播放失敗時 Play() 才會回報。呼叫端(MainWindow)在使用者把游標移到某一列時呼叫。
+        /// </summary>
+        public void Preload(AudioMapRow row, string folderPath)
+        {
+            if (_row != null)
+                return;
+
+            if (row == null || row == _preloadRow)
+                return;
+
+            if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath) || string.IsNullOrEmpty(row.FileName))
+            {
+                ClearPreload();
+                return;
+            }
+
+            string fullPath = Path.Combine(folderPath, row.FileName);
+            if (!File.Exists(fullPath))
+            {
+                ClearPreload();
+                return;
+            }
+
+            ClearPreload();
+
+            _preloadRow = row;
+            _preloadFullPath = fullPath;
+            _standbyReady = false;
+
+            _standbyPlayer = new MediaPlayer();
+            _standbyPlayer.MediaOpened += StandbyPlayer_MediaOpened;
+            _standbyPlayer.MediaFailed += StandbyPlayer_MediaFailed;
+            _standbyPlayer.Open(new Uri(fullPath));
+        }
+
+        /// <summary>
+        /// 如果 row 剛好是已經預先開啟好、開啟完成的那一列,把待命播放器接手成正式的 _player,
+        /// 略過等待 MediaPlayer.Open() 的過程,直接夾時間、定位、開始播放。回傳是不是真的用上了預載。
+        /// </summary>
+        private bool TryUsePreloadedPlayer(AudioMapRow row, string fullPath)
+        {
+            if (_preloadRow != row || !_standbyReady || _standbyPlayer == null ||
+                !string.Equals(_preloadFullPath, fullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // 原本的 _player(還沒真的播過、或是上一首播完留下的)不再需要,收掉讓待命播放器接手
+            _player.MediaOpened -= Player_MediaOpened;
+            _player.MediaEnded -= Player_MediaEnded;
+            _player.MediaFailed -= Player_MediaFailed;
+            _player.Close();
+
+            _player = _standbyPlayer;
+            _player.MediaOpened -= StandbyPlayer_MediaOpened;
+            _player.MediaFailed -= StandbyPlayer_MediaFailed;
+            _player.MediaOpened += Player_MediaOpened;
+            _player.MediaEnded += Player_MediaEnded;
+            _player.MediaFailed += Player_MediaFailed;
+
+            _standbyPlayer = null;
+            _preloadRow = null;
+            _preloadFullPath = null;
+            _standbyReady = false;
+
+            // 已經開好檔了(NaturalDuration 早就知道),直接夾時間、定位、播放,不用再等一次 MediaOpened
+            if (_player.NaturalDuration.HasTimeSpan)
+                ClampRowTimesToNaturalDuration(_player.NaturalDuration.TimeSpan);
+
+            _player.Volume = ParseVolume(row.MaxS);
+            _player.Position = _openingStart;
+            _player.Play();
+            _timer.Start();
+            return true;
+        }
+
+        /// <summary>清掉目前預載的待命播放器(不影響正在播放/暫停的 _player)。</summary>
+        private void ClearPreload()
+        {
+            if (_standbyPlayer != null)
+            {
+                _standbyPlayer.MediaOpened -= StandbyPlayer_MediaOpened;
+                _standbyPlayer.MediaFailed -= StandbyPlayer_MediaFailed;
+                _standbyPlayer.Close();
+                _standbyPlayer = null;
+            }
+
+            _preloadRow = null;
+            _preloadFullPath = null;
+            _standbyReady = false;
+        }
+
+        private void StandbyPlayer_MediaOpened(object sender, EventArgs e)
+        {
+            if (sender == _standbyPlayer)
+                _standbyReady = true;
+        }
+
+        private void StandbyPlayer_MediaFailed(object sender, ExceptionEventArgs e)
+        {
+            // 預載失敗就靜靜放棄,不影響任何畫面——真正播放時 Play() 會重新走一次正常流程並回報錯誤
+            if (sender == _standbyPlayer)
+                ClearPreload();
         }
 
         /// <summary>暫停目前播放的列(保留播放位置);沒有列在播放時不做事。</summary>

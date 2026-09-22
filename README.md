@@ -128,6 +128,8 @@
 
 `PlaybackController` 用一個 `DispatcherTimer`(目前間隔 20ms,見 `PollInterval`)輪詢播放位置,判斷是否該從開場片段切到循環片段、或循環片段該跳回開始時間重播;底部兩條播放進度條也是同一個計時器驅動,所以「時間軸」跟「音樂斷點」的落差就是這個輪詢間隔造成的,調短間隔可以讓兩者更接近同步。**這個間隔有天花板**:`MediaPlayer.Position` 本身的更新粒度、壓縮格式(例如 MP3)只能跳到最接近的音框邊界(常見約 20~30ms 一個音框)這兩個限制不會因為間隔調更短而消失,想要逐取樣精準大概要換掉 `MediaPlayer`、改用其他播放引擎(例如 NAudio),是更大的改動。時間欄位最後的「碼」(`ffff`)目前當成**萬分之一秒**處理(`0456` = 0.0456 秒),不是影格數;如果實際上是要換算成某個幀率(fps)的影格,再回來調整 `Utilities/TimecodeFormat.cs` 的 `TryParse` 就好。
 
+**提前預先開啟(減少切歌卡頓)**:`MediaPlayer.Open()` 是非同步的,讀檔、初始化解碼器需要時間,兩首歌之間切換時常常會有一下卡頓感就是在等這個。`PlaybackController` 額外維護一顆「待命播放器」(`_standbyPlayer`):`MainWindow` 在任一頁簽的儲存格取得焦點時(`Control_ActiveItemChanged`,四個頁簽共用的事件)、以及按下「停止」之後,都會呼叫 `Preload(目前作用列, 資料夾)`——只有在**目前沒有任何列在播放/暫停**時才會真的預載,提前把那一列的音效檔開好、但不播放。等使用者真的按下「開始」,如果剛好是同一列、待命播放器也已經開完(`MediaOpened` 已觸發),`Play()` 就直接把待命播放器接手成正式的 `_player`,省掉再等一次 `Open()` 的時間,直接定位、開始播放;如果不是同一列、或還沒開完,就照原本的流程(重新 `Open()` 再等 `MediaOpened`)。預載失敗(檔案不存在、格式不對...等)不會跳出任何提示——這只是投機性的背景動作,真正播放失敗時 `Play()` 自己會回報。
+
 **播放進度條**:視窗最下方有兩條進度條(`Slider`),上面對應「開場片段」的總時長,下面對應「循環片段」的總時長,方便暫停後精準抓取時間點,旁邊各有一個 `HH:mm:ss:ffff` 格式的時間顯示(`TimecodeFormat.Format`)。**這兩個時間文字點一下會把目前顯示的時間複製到剪貼簿**(`MainWindow.xaml.cs` 的 `TxtPosition_Click`,滑鼠移上去游標會變成手型),方便直接貼到「開場片段」「循環片段」頁簽的時間欄位裡。
 
 - **播放中**:兩條都反灰不能拖,但會隨播放位置自動移動——「開場片段」進度條顯示目前在開場片段內的進度,進入循環片段後固定顯示滿格;「循環片段」進度條進入循環片段後才開始顯示進度(反覆循環,播到結束就跳回開頭),還沒進入循環片段前固定顯示 0。
@@ -196,7 +198,7 @@ AudioMapTool/
     │   ├── AudioMapRow.cs                        # 一筆資料:Code/FileName/SStart/SEnd/CStart/CEnd/MaxS/IsSelected,四個頁簽共用同一份物件;另有播放狀態與一系列畫面用的計算屬性
     │   └── RowPlaybackState.cs                   # 列的播放狀態列舉:None/Playing/Paused
     ├── Services/
-    │   └── PlaybackController.cs                 # 「開始/暫停/停止」背後的播放引擎(包裝 MediaPlayer),開場片段播一次接循環片段反覆播放,並提供暫停中拖曳底部進度條用的 Seek 方法
+    │   └── PlaybackController.cs                 # 「開始/暫停/停止」背後的播放引擎(包裝 MediaPlayer),開場片段播一次接循環片段反覆播放,提供暫停中拖曳底部進度條用的 Seek 方法,並用待命播放器提前預先開啟下一個可能要播的檔案
     ├── Converters/
     │   ├── NullOrEmptyToBooleanConverter.cs      # 字串是否為空 → 布林值,「資料夾」未選時停用音效檔名稱欄
     │   └── VolumeStringConverter.cs              # 音量欄字串 <-> 0~1 的 double 互轉,給 Slider.Value 用

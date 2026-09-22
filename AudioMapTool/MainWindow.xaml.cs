@@ -104,9 +104,15 @@ namespace AudioMapTool
             pathMapControl.FolderPath = folder;
         }
 
+        /// <summary>
+        /// 哪個頁簽的哪個儲存格取得焦點都會觸發這裡,更新「目前作用列」;順便呼叫 _playback.Preload
+        /// 提前開啟這一列的音效檔(只有目前沒有任何列在播放/暫停時才會真的預載,見 PlaybackController.Preload),
+        /// 讓使用者遊標停在某一列一陣子後再按「開始」時可以直接接手,減少切換音樂時的讀取卡頓感。
+        /// </summary>
         private void Control_ActiveItemChanged(object sender, AudioMapRow item)
         {
             _activeItem = item;
+            _playback.Preload(item, txtFolder.Text);
         }
 
         private void Control_UndoSnapshotRequested(object sender, List<AudioMapRow> snapshotBeforeChange)
@@ -139,6 +145,10 @@ namespace AudioMapTool
             _playback.Stop();
             UnlockAllRows();
             SetGlobalControlsEnabled(true);
+
+            // 停止後遊標通常還停在剛剛播放的那一列(不會重新觸發 GotFocus),順便補一次預載,
+            // 讓「停止後馬上重播同一列」也能吃到提前開啟的好處。
+            _playback.Preload(_activeItem, txtFolder.Text);
         }
 
         private void Playback_PlaybackFailed(object sender, string message)
