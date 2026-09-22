@@ -106,6 +106,9 @@
       <DependentUpon>MaxVolumeControl.xaml</DependentUpon>
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Fragment\ITabSyncable.cs">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="Converters\NullOrEmptyToBooleanConverter.cs">
       <SubType>Code</SubType>
     </Compile>
@@ -113,6 +116,9 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Utilities\TimecodeFormat.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="Utilities\VisualTreeUtilities.cs">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Models\AudioMapRow.cs">

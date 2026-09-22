@@ -63,8 +63,10 @@
             頁簽:每個頁簽都是自己專屬的 UserControl(Fragment 資料夾底下),欄位結構各自不同,
             但四個頁簽共用同一份 AudioMapRow 資料(MainWindow 建立視窗時把同一個 ObservableCollection
             指定給四個控制項的 Items),同一列在四個頁簽對應到同一筆資料。
+            SelectionChanged 統一走 MainWindow.xaml.cs 的 TabMain_SelectionChanged:切頁簽時把「目前作用列」
+            「最後捲動位置」套用到剛顯示出來的頁簽,讓切頁簽時停在使用者原本看的同一列/同一個捲動位置。
         -->
-        <TabControl x:Name="tabMain" Grid.Row="2" Margin="4">
+        <TabControl x:Name="tabMain" Grid.Row="2" Margin="4" SelectionChanged="TabMain_SelectionChanged">
             <TabItem Header="路徑">
                 <fragment:PathMapControl x:Name="pathMapControl" />
             </TabItem>

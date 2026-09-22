@@ -17,7 +17,8 @@
                   RowHeight="24"
                   SelectionUnit="Cell"
                   CellStyle="{StaticResource DataGridCellStyleNoBorder}"
-                  Margin="4">
+                  Margin="4"
+                  ScrollViewer.ScrollChanged="DataGrid_ScrollChanged">
             <DataGrid.RowStyle>
                 <Style TargetType="DataGridRow">
                     <Setter Property="IsEnabled" Value="{Binding IsPathTabRowEnabled}" />

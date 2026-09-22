@@ -17,8 +17,9 @@ namespace AudioMapTool.Fragment
     /// 「循環片段」頁簽:選/功能代號/開始時間/結束時間,綁定共用 AudioMapRow 的 CStart/CEnd。
     /// 開始/結束時間格式固定為「時:分:秒:碼」(HH:mm:ss:ffff,見 Utilities.TimecodeFormat)。
     /// 資料來源(Items)由 MainWindow 指定,跟「路徑」「開場片段」「最大音量」頁簽共用同一份。
+    /// 實作 ITabSyncable,支援切頁簽時同步「目前選取的列」跟「垂直捲動位置」。
     /// </summary>
-    public partial class LoopSegmentControl : UserControl
+    public partial class LoopSegmentControl : UserControl, ITabSyncable
     {
         private ObservableCollection<AudioMapRow> _items;
 
@@ -34,6 +35,9 @@ namespace AudioMapTool.Fragment
 
         public event EventHandler<AudioMapRow> ActiveItemChanged;
         public event EventHandler<List<AudioMapRow>> UndoSnapshotRequested;
+
+        /// <summary>使用者捲動這個頁簽時觸發(ITabSyncable)。</summary>
+        public event EventHandler<double> ScrollPositionChanged;
 
         private string _codeValueOnFocus;
         private string _startValueOnFocus;
@@ -299,6 +303,43 @@ namespace AudioMapTool.Fragment
             }
 
             return null;
+        }
+
+        #endregion
+
+        #region ITabSyncable(跨頁簽同步選取列/捲動位置)
+
+        /// <summary>把選取狀態設到指定列(功能代號欄),只更新視覺反藍,不呼叫 Focus() 搶走鍵盤焦點。</summary>
+        public void SyncSelectedRow(AudioMapRow item)
+        {
+            if (item == null)
+                return;
+
+            DataGridCellInfo cellInfo = new DataGridCellInfo(item, colCode);
+            dgSegment.CurrentCell = cellInfo;
+            dgSegment.SelectedCells.Clear();
+            dgSegment.SelectedCells.Add(cellInfo);
+        }
+
+        public double GetVerticalOffset()
+        {
+            ScrollViewer scrollViewer = VisualTreeUtilities.FindVisualChild<ScrollViewer>(dgSegment);
+            return scrollViewer == null ? 0 : scrollViewer.VerticalOffset;
+        }
+
+        public void ScrollToVerticalOffset(double offset)
+        {
+            ScrollViewer scrollViewer = VisualTreeUtilities.FindVisualChild<ScrollViewer>(dgSegment);
+            if (scrollViewer != null)
+                scrollViewer.ScrollToVerticalOffset(offset);
+        }
+
+        /// <summary>DataGrid 內部 ScrollViewer 的 ScrollChanged 事件會冒泡到這裡(見 XAML 的 ScrollViewer.ScrollChanged)。</summary>
+        private void DataGrid_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            EventHandler<double> handler = ScrollPositionChanged;
+            if (handler != null)
+                handler(this, e.VerticalOffset);
         }
 
         #endregion

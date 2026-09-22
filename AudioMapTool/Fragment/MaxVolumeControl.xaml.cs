@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AudioMapTool.Models;
+using AudioMapTool.Utilities;
 
 namespace AudioMapTool.Fragment
 {
@@ -19,8 +20,9 @@ namespace AudioMapTool.Fragment
     /// 「開始」「停止」「暫停」按鈕只負責把使用者的意圖(PlayRequested/PauseRequested/StopRequested)
     /// 往外報,實際播放邏輯、鎖定其他列/工具列都是 MainWindow 配合 Services/PlaybackController 處理,
     /// 因為那些動作牽涉到「這份資料的全部列」跟「工具列」,不是這個 UserControl 自己管得到的範圍。
+    /// 實作 ITabSyncable,支援切頁簽時同步「目前選取的列」跟「垂直捲動位置」。
     /// </summary>
-    public partial class MaxVolumeControl : UserControl
+    public partial class MaxVolumeControl : UserControl, ITabSyncable
     {
         private ObservableCollection<AudioMapRow> _items;
 
@@ -43,6 +45,9 @@ namespace AudioMapTool.Fragment
         public event EventHandler<AudioMapRow> PauseRequested;
         /// <summary>使用者按下這一列的「停止」按鈕。</summary>
         public event EventHandler<AudioMapRow> StopRequested;
+
+        /// <summary>使用者捲動這個頁簽時觸發(ITabSyncable)。</summary>
+        public event EventHandler<double> ScrollPositionChanged;
 
         private string _codeValueOnFocus;
         private string _volumeValueOnFocus;
@@ -267,6 +272,43 @@ namespace AudioMapTool.Fragment
                 return;
 
             handler(this, item);
+        }
+
+        #endregion
+
+        #region ITabSyncable(跨頁簽同步選取列/捲動位置)
+
+        /// <summary>把選取狀態設到指定列(功能代號欄),只更新視覺反藍,不呼叫 Focus() 搶走鍵盤焦點。</summary>
+        public void SyncSelectedRow(AudioMapRow item)
+        {
+            if (item == null)
+                return;
+
+            DataGridCellInfo cellInfo = new DataGridCellInfo(item, colCode);
+            dgMaxVolume.CurrentCell = cellInfo;
+            dgMaxVolume.SelectedCells.Clear();
+            dgMaxVolume.SelectedCells.Add(cellInfo);
+        }
+
+        public double GetVerticalOffset()
+        {
+            ScrollViewer scrollViewer = VisualTreeUtilities.FindVisualChild<ScrollViewer>(dgMaxVolume);
+            return scrollViewer == null ? 0 : scrollViewer.VerticalOffset;
+        }
+
+        public void ScrollToVerticalOffset(double offset)
+        {
+            ScrollViewer scrollViewer = VisualTreeUtilities.FindVisualChild<ScrollViewer>(dgMaxVolume);
+            if (scrollViewer != null)
+                scrollViewer.ScrollToVerticalOffset(offset);
+        }
+
+        /// <summary>DataGrid 內部 ScrollViewer 的 ScrollChanged 事件會冒泡到這裡(見 XAML 的 ScrollViewer.ScrollChanged)。</summary>
+        private void DataGrid_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            EventHandler<double> handler = ScrollPositionChanged;
+            if (handler != null)
+                handler(this, e.VerticalOffset);
         }
 
         #endregion

@@ -35,7 +35,7 @@
 └────┴────────────┴────────────────────────────────────┘
 ```
 
-**四個頁簽對應同一份資料**:同一個功能代號(同一列)在「路徑」「開場片段」「循環片段」「最大音量」四個頁簽裡是同一筆資料,只是每個頁簽顯示/編輯其中幾個欄位(見下方「對照表欄位」)。新增/刪除/拷貝/復原/取消復原、開啟/存檔也都是對這一份共用資料操作,不分頁簽。
+**四個頁簽對應同一份資料**:同一個功能代號(同一列)在「路徑」「開場片段」「循環片段」「最大音量」四個頁簽裡是同一筆資料,只是每個頁簽顯示/編輯其中幾個欄位(見下方「對照表欄位」)。新增/刪除/拷貝/復原/取消復原、開啟/存檔也都是對這一份共用資料操作,不分頁簽。**切換頁簽時,目前選取的列跟捲動位置也會跟著換到新頁簽**(見下方「跨頁簽同步」),四個頁簽感覺起來像同一份清單的不同欄位視圖,而不是各自獨立的表格。
 
 **音效檔資料夾**:工具列右側的「資料夾」是音效檔的基準資料夾,點「...」選一個本機資料夾。「路徑」頁簽的「音效檔名稱」欄只存**檔名**(例如 `click.wav`),實際檔案位置 = 這個資料夾 + 檔名。資料夾本身**不會**存進 `.ini` 檔(每台電腦的資料夾位置不同,本來就要各自選),所以同一份 `.ini` 換電腦開,只要重新選一次資料夾就能用。沒選資料夾之前,「音效檔名稱」欄整欄反灰不能用。開啟 `.ini` 檔時,「資料夾」會自動先帶入該 `.ini` 檔所在的資料夾(方便音效檔跟 `.ini` 放在同一層的情況),不符合的話再手動重選即可。
 
@@ -101,6 +101,23 @@
 - 游標離開欄位時驗證格式,空字串算合法(代表還沒填);有值但格式不符,會跳出提示訊息並把焦點/選取範圍留在原欄位,方便直接修正。
 
 **音量欄位**:「最大音量」頁簽的音量不能直接打字輸入,改用 Slider 拖曳調整,範圍固定 0~1(`Minimum="0" Maximum="1"`,結構上就不可能超出範圍),右側會即時顯示目前數值(到小數點後兩位)。底層 `AudioMapRow.MaxS` 還是字串(跟其他欄位一致,方便存 ini),由 `Converters/VolumeStringConverter.cs` 負責字串 `<->` 0~1 的 `double` 互轉,**新增(工具列「新增」按鈕、Enter 插入空白列)出來的列預設是 1(滿音量)**。放開滑桿、值真的變動時才會記一筆復原快照,不會每拖一下就記一筆。**這個欄位播放中/暫停中都不會反灰**,拖動時如果這一列正在播放,`PlaybackController` 會即時把新音量套用到正在播放的聲音上(見下方「播放」)。
+
+### 跨頁簽同步
+
+四個頁簽對應同一份資料(見上方「四個頁簽對應同一份資料」),為了讓它們感覺像同一份清單,切換頁簽時「目前選取的列」跟「捲動位置」會跟著換到剛顯示出來的頁簽:
+
+- 在任一頁簽點選某一列(例如點「路徑」頁簽的某一格),切到「開場片段」頁簽時,會自動停在同一列(反藍的儲存格對齊到同一列的「功能代號」欄),不用重新捲動找。
+- 在任一頁簽捲動清單,切到別的頁簽時也會停在差不多的捲動位置。
+
+實作上,四個 `Fragment` UserControl 都實作 `Fragment/ITabSyncable.cs`:
+
+- `SyncSelectedRow(item)`:把 `CurrentCell`/`SelectedCells` 設到指定列(功能代號欄),只更新視覺上的反藍,不呼叫 `Focus()`,不會搶走使用者正在別處輸入的鍵盤焦點。
+- `GetVerticalOffset()` / `ScrollToVerticalOffset(offset)`:讀取/設定 DataGrid 內部 `ScrollViewer` 的垂直捲動位置(`DataGrid` 本身沒有直接公開這兩個操作,透過 `Utilities/VisualTreeUtilities.cs` 的 `FindVisualChild<T>` 到視覺樹裡找)。
+- `ScrollPositionChanged` 事件:XAML 在 `DataGrid` 上掛了 `ScrollViewer.ScrollChanged`(附加事件,會從內部 ScrollViewer 冒泡上來),使用者捲動時觸發。
+
+`MainWindow` 只在**切頁簽的當下**才套用(`TabMain_SelectionChanged`,呼叫剛顯示出來那個頁簽的 `SyncSelectedRow`/`ScrollToVerticalOffset`),不是即時同步到全部四個(包含目前看不到的)頁簽——因為使用者一次只看得到一個頁簽,隱藏頁簽的版面配置也不一定就緒(`ScrollViewer` 可能還沒被找到),等切過去那一刻才套用最新的「目前作用列」(`_activeItem`,既有機制,任一頁簽的儲存格取得焦點就會更新)跟「最後捲動位置」(`_lastScrollOffset`,由 `Control_ScrollPositionChanged` 持續記錄),效果上使用者感覺不出差別,還避開了對隱藏頁簽做版面操作的風險。
+
+`SyncSelectedRow` 是同步呼叫沒問題,但 `ScrollToVerticalOffset` 若跟著在 `SelectionChanged` 事件裡同步呼叫,第一次切到某個頁簽時該頁簽的內容常常才剛要開始版面配置(`ScrollViewer` 的可捲動範圍還沒算完),這時候設定的捲動位置會被夾到 0 或直接被之後的版面配置蓋掉,造成「有時候同步、有時候不同步」——通常是第一次切過去失敗、之後再切就正常,因為版面已經配置過一次了。修法是把 `ScrollToVerticalOffset` 包進 `Dispatcher.BeginInvoke(..., DispatcherPriority.Loaded)`,延到那次切頁簽的版面配置/算繪都跑完之後才套用,確保每次切頁簽都抓得到正確的捲動範圍。
 
 ### 播放
 
@@ -190,6 +207,7 @@ AudioMapTool/
     ├── App.xaml / App.xaml.cs                    # 應用程式進入點;共用樣式資源(DataGrid 儲存格/TextBox/CheckBox/TabItem 外觀)、反灰用的轉換器資源
     ├── MainWindow.xaml / .xaml.cs                 # 主畫面(選單、工具列、頁簽容器 TabControl、底部兩條播放進度條),擁有唯一一份共用資料、復原/取消復原堆疊
     ├── Fragment/
+    │   ├── ITabSyncable.cs                        # 四個頁簽共用的介面:跨頁簽同步「目前選取的列」跟「垂直捲動位置」
     │   ├── PathMapControl.xaml / .xaml.cs         # 「路徑」頁簽:選/功能代號/音效檔名稱(Code/FileName),另有 FolderPath 依附屬性
     │   ├── OpeningSegmentControl.xaml / .xaml.cs  # 「開場片段」頁簽:選/功能代號/開始/結束時間(Code/SStart/SEnd)
     │   ├── LoopSegmentControl.xaml / .xaml.cs     # 「循環片段」頁簽:選/功能代號/開始/結束時間(Code/CStart/CEnd)
@@ -203,7 +221,8 @@ AudioMapTool/
     │   ├── NullOrEmptyToBooleanConverter.cs      # 字串是否為空 → 布林值,「資料夾」未選時停用音效檔名稱欄
     │   └── VolumeStringConverter.cs              # 音量欄字串 <-> 0~1 的 double 互轉,給 Slider.Value 用
     └── Utilities/
-        └── TimecodeFormat.cs                     # 「時:分:秒:碼」(HH:mm:ss:ffff)格式規則與剖析,開場/循環片段的開始/結束時間、播放定位共用
+        ├── TimecodeFormat.cs                     # 「時:分:秒:碼」(HH:mm:ss:ffff)格式規則與剖析,開場/循環片段的開始/結束時間、播放定位共用
+        └── VisualTreeUtilities.cs                # 視覺樹搜尋工具(FindVisualChild<T>),用來找 DataGrid 內部的 ScrollViewer
 ```
 
 ### MainWindow(選單/工具列/頁簽容器,擁有唯一一份資料)
@@ -214,7 +233,7 @@ AudioMapTool/
 
 `MainWindow.xaml.cs` 依功能分成以下幾個 `#region`:
 
-- 變數與初始化:建立 `_items`,指定給四個頁簽控制項的 `Items`;訂閱每個控制項的 `ActiveItemChanged`(更新 `_activeItem`)與 `UndoSnapshotRequested`(推進復原堆疊)事件,以及 `maxVolumeControl` 的 `PlayRequested`/`PauseRequested`/`StopRequested`(轉呼叫 `_playback`,見「播放」);`BtnBrowseFolder_Click` 用 `System.Windows.Forms.FolderBrowserDialog` 選音效檔資料夾;`SetFolder(folder)` 統一更新 `txtFolder.Text` 跟 `pathMapControl.FolderPath`,選資料夾按鈕、開啟 `.ini` 檔(見下)都是呼叫這個方法;`LockOtherRows`/`UnlockAllRows`/`SetGlobalControlsEnabled` 是播放期間鎖定其他列跟選單/工具列用的
+- 變數與初始化:建立 `_items`,指定給四個頁簽控制項的 `Items`;訂閱每個控制項的 `ActiveItemChanged`(更新 `_activeItem`)、`UndoSnapshotRequested`(推進復原堆疊)、`ScrollPositionChanged`(更新 `_lastScrollOffset`,見「跨頁簽同步」)事件,以及 `maxVolumeControl` 的 `PlayRequested`/`PauseRequested`/`StopRequested`(轉呼叫 `_playback`,見「播放」);`TabMain_SelectionChanged` 切頁簽時把 `_activeItem`/`_lastScrollOffset` 套用到新頁簽;`BtnBrowseFolder_Click` 用 `System.Windows.Forms.FolderBrowserDialog` 選音效檔資料夾;`SetFolder(folder)` 統一更新 `txtFolder.Text` 跟 `pathMapControl.FolderPath`,選資料夾按鈕、開啟 `.ini` 檔(見下)都是呼叫這個方法;`LockOtherRows`/`UnlockAllRows`/`SetGlobalControlsEnabled` 是播放期間鎖定其他列跟選單/工具列用的
 - 全域快捷鍵(`Window_KeyDown` 一開始先檢查 `mainMenu.IsEnabled`,播放/暫停期間選單被鎖住時 Ctrl+S/Z/Y 也一併停用)
 - 復原/取消復原:`CloneItems()`/`ApplySnapshot()`/`PushUndoSnapshot()`/`Undo()`/`Redo()`,跟資料一樣只有一份,不分頁簽
 - 選單按鈕(檔案:新增/開啟/存檔/另存新檔/關閉,一律操作 `_items`;存檔/開啟固定讀寫 `FileName`/`SStart`/`SEnd`/`CStart`/`CEnd`/`MaxS` 六個欄位,「資料夾」不存進檔案;`DoOpen()` 成功讀完 `.ini` 後會呼叫 `SetFolder(Path.GetDirectoryName(...))`,自動把「資料夾」帶成該 `.ini` 檔所在的資料夾)
@@ -227,6 +246,7 @@ AudioMapTool/
 - `Items`:外部(`MainWindow`)指定的共用 `ObservableCollection<AudioMapRow>`,直接綁給內部 DataGrid。
 - `ActiveItemChanged` 事件:儲存格取得焦點時觸發,回報該列資料。
 - `UndoSnapshotRequested` 事件:儲存格編輯真的造成異動時觸發,帶出異動前的整份快照,由 `MainWindow` 記錄進復原堆疊。
+- 都實作 `ITabSyncable`(`Fragment/ITabSyncable.cs`):`SyncSelectedRow`/`GetVerticalOffset`/`ScrollToVerticalOffset` 三個方法加 `ScrollPositionChanged` 事件,供切頁簽時同步「目前選取列」跟「垂直捲動位置」用(見上方「跨頁簽同步」)。`GetVerticalOffset`/`ScrollToVerticalOffset` 都是透過 `Utilities/VisualTreeUtilities.FindVisualChild<ScrollViewer>` 找到 DataGrid 內部的 `ScrollViewer` 再讀寫;`ScrollPositionChanged` 則是由 XAML 上 DataGrid 的 `ScrollViewer.ScrollChanged` 附加事件冒泡觸發。
 
 各自的欄位結構、DataGrid 定義不共用(`OpeningSegmentControl`/`LoopSegmentControl` 欄位結構相同但綁定不同屬性,所以還是各自一個類別),只共用 `App.xaml` 的儲存格樣式跟上面兩個事件的介面形狀。目前作用列追蹤、功能代號重複驗證、Enter 插入空白列都是各自實作。
 

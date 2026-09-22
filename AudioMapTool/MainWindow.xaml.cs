@@ -7,6 +7,8 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
+using AudioMapTool.Fragment;
 using AudioMapTool.Models;
 using AudioMapTool.Services;
 using AudioMapTool.Utilities;
@@ -53,6 +55,9 @@ namespace AudioMapTool
         /// </summary>
         private bool _isSyncingPositionSliders;
 
+        /// <summary>目前(或最後一次)作用中頁簽的垂直捲動位置,切頁簽時套用到剛顯示出來的那個頁簽,見 TabMain_SelectionChanged。</summary>
+        private double _lastScrollOffset;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -71,6 +76,11 @@ namespace AudioMapTool
             openingSegmentControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
             loopSegmentControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
             maxVolumeControl.UndoSnapshotRequested += Control_UndoSnapshotRequested;
+
+            pathMapControl.ScrollPositionChanged += Control_ScrollPositionChanged;
+            openingSegmentControl.ScrollPositionChanged += Control_ScrollPositionChanged;
+            loopSegmentControl.ScrollPositionChanged += Control_ScrollPositionChanged;
+            maxVolumeControl.ScrollPositionChanged += Control_ScrollPositionChanged;
 
             maxVolumeControl.PlayRequested += MaxVolumeControl_PlayRequested;
             maxVolumeControl.PauseRequested += MaxVolumeControl_PauseRequested;
@@ -118,6 +128,43 @@ namespace AudioMapTool
         private void Control_UndoSnapshotRequested(object sender, List<AudioMapRow> snapshotBeforeChange)
         {
             PushUndoSnapshot(snapshotBeforeChange);
+        }
+
+        /// <summary>
+        /// 記住目前作用頁簽的捲動位置,供切頁簽時套用到新頁簽(見 TabMain_SelectionChanged)。
+        /// 不用即時同步到其他(目前看不到的)頁簽——反正使用者一次只看得到一個頁簽,
+        /// 等切過去那一刻才套用最新的位置,效果沒有差別,也不用擔心隱藏頁簽版面配置還沒就緒的問題。
+        /// </summary>
+        private void Control_ScrollPositionChanged(object sender, double offset)
+        {
+            _lastScrollOffset = offset;
+        }
+
+        /// <summary>
+        /// 切頁簽時,把「目前作用列」「最後捲動位置」套用到剛顯示出來的頁簽,讓四個頁簽感覺像同一份清單,
+        /// 切過去還停在原本看的同一列、同一個捲動位置。SelectionChanged 會冒泡(DataGrid 本身也是 Selector),
+        /// 所以要排除不是 TabControl 本身觸發的事件。
+        /// </summary>
+        private void TabMain_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!ReferenceEquals(e.OriginalSource, tabMain))
+                return;
+
+            TabItem selectedTab = tabMain.SelectedItem as TabItem;
+            ITabSyncable syncable = selectedTab == null ? null : selectedTab.Content as ITabSyncable;
+            if (syncable == null)
+                return;
+
+            syncable.SyncSelectedRow(_activeItem);
+
+            // 剛切過去的頁簽如果是第一次顯示,版面配置(含 DataGrid 內部 ScrollViewer 的捲動範圍)
+            // 這時候可能還沒算完,直接 ScrollToVerticalOffset 會被夾到 0 或無效,所以延到
+            // Loaded 優先權(版面配置/算繪跑完之後)才套用,確保每次切頁簽都能同步成功。
+            double targetOffset = _lastScrollOffset;
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                syncable.ScrollToVerticalOffset(targetOffset);
+            }), DispatcherPriority.Loaded);
         }
 
         /// <summary>
