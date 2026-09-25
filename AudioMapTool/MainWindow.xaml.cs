@@ -186,16 +186,15 @@ namespace AudioMapTool
             _playback.Pause();
         }
 
-        /// <summary>「最大音量」頁簽按下「停止」:停止播放,解除所有列跟選單/工具列的鎖定。</summary>
+        /// <summary>
+        /// 「最大音量」頁簽按下「停止」:停止播放。解除所有列跟選單/工具列的鎖定、
+        /// 補一次預載(讓「停止後馬上重播同一列」也能吃到提前開啟的好處)統一由
+        /// Playback_PositionChanged 在偵測到 PlayingRow 變 null 時處理,不只是使用者主動按停止,
+        /// PlaybackController 自己觸發的停止(見下方「播放」章節)也會走到同一個地方解除鎖定。
+        /// </summary>
         private void MaxVolumeControl_StopRequested(object sender, AudioMapRow row)
         {
             _playback.Stop();
-            UnlockAllRows();
-            SetGlobalControlsEnabled(true);
-
-            // 停止後遊標通常還停在剛剛播放的那一列(不會重新觸發 GotFocus),順便補一次預載,
-            // 讓「停止後馬上重播同一列」也能吃到提前開啟的好處。
-            _playback.Preload(_activeItem, txtFolder.Text);
         }
 
         private void Playback_PlaybackFailed(object sender, string message)
@@ -217,6 +216,14 @@ namespace AudioMapTool
             if (row == null)
             {
                 ResetPositionBars();
+
+                // PlayingRow 變 null 代表播放真的停止了——不管是使用者按「停止」,還是
+                // PlaybackController 自己觸發的停止(例如循環片段沒有長度、或播放失敗),
+                // 都要在這裡統一解除鎖定,不然自動停止的情況畫面會卡在反灰狀態。
+                // 已經解除過的話這裡再呼叫一次也不會有副作用(全部設回同樣的值)。
+                UnlockAllRows();
+                SetGlobalControlsEnabled(true);
+                _playback.Preload(_activeItem, txtFolder.Text);
                 return;
             }
 

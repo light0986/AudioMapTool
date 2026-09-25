@@ -407,6 +407,14 @@ namespace AudioMapTool.Services
             {
                 if (_player.Position >= _openingEnd)
                 {
+                    if (_loopStart >= _loopEnd)
+                    {
+                        // 循環片段的開始/結束時間相同(沒有長度、不用播放):開場片段播完就直接停止,
+                        // 不進入循環片段——不然每次輪詢都會把播放位置定位回同一個點,會一直產生破音。
+                        Stop();
+                        return;
+                    }
+
                     _stage = Stage.Loop;
                     _player.Position = _loopStart;
                 }
@@ -471,11 +479,18 @@ namespace AudioMapTool.Services
             }
         }
 
-        /// <summary>音效檔本身比設定的片段短、提早播完時的保底處理:開場片段播完就接循環片段,循環片段播完就重頭循環。</summary>
+        /// <summary>音效檔本身比設定的片段短、提早播完時的保底處理:開場片段播完就接循環片段,循環片段播完就重頭循環;
+        /// 循環片段沒有長度(開始/結束時間相同,不用播放)時直接停止。</summary>
         private void Player_MediaEnded(object sender, EventArgs e)
         {
             if (_row == null)
                 return;
+
+            if (_loopStart >= _loopEnd)
+            {
+                Stop();
+                return;
+            }
 
             _stage = Stage.Loop;
             _player.Position = _loopStart;
